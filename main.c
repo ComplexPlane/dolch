@@ -198,8 +198,12 @@ void add_section_to_dol(FILE *dol_file, struct dol_header *new_header) {
 
     // Add section to end of file
     fseek(dol_file, 0, SEEK_END);
-    uint8_t zero = 0;
-    fwrite(&zero, 1, new_header->dol_size - ftell(dol_file), dol_file);
+
+    // Better way to do this without malloc?
+    size_t additional_size = new_header->dol_size - ftell(dol_file);
+    void *buf = calloc(1, additional_size);
+    fwrite(buf, additional_size, 1, dol_file);
+    free(buf);
 }
 
 void cp(FILE *file1, FILE *file2) {
