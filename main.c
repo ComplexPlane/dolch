@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <memory.h>
+#include <stdarg.h>
 
 #define TEXT_SECTIONS 7
 #define DATA_SECTIONS 11
@@ -21,6 +22,14 @@ struct dol_header {
     uint32_t entry_point_address;
 };
 
+void fatal(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+    exit(1);
+}
+
 uint32_t parse_u32_bigendian(uint32_t val) {
     uint8_t *ptr = (void *) &val;
 
@@ -28,6 +37,18 @@ uint32_t parse_u32_bigendian(uint32_t val) {
            (uint32_t) ptr[1] << 16u |
            (uint32_t) ptr[2] << 8u |
            (uint32_t) ptr[3] << 0u;
+}
+
+uint32_t encode_u32_bigendian(uint32_t val) {
+    uint32_t ret = 0;
+    uint8_t *ptr = (void *) &ret;
+
+    ptr[0] |= val >> 24u;
+    ptr[1] |= val >> 16u;
+    ptr[2] |= val >> 8u;
+    ptr[3] |= val >> 0u;
+
+    return ret;
 }
 
 void parse_dol_header(void *dolbuf, struct dol_header *header) {
@@ -44,13 +65,7 @@ void parse_dol_header(void *dolbuf, struct dol_header *header) {
     header->entry_point_address = parse_u32_bigendian(dol_u32_arr[3 * MAX_SECTIONS + 2]);
 }
 
-bool read_dol_header(const char *filename, struct dol_header *header) {
-    FILE *dol_file = fopen(filename, "rb");
-    if (!dol_file) {
-        fprintf(stderr, "Failed to open file: %s\n", filename);
-        return false;
-    }
-
+void read_dol_header(FILE *dol_file, struct dol_header *header) {
     fseek(dol_file, 0, SEEK_END);
     size_t dol_size = ftell(dol_file);
     rewind(dol_file);
@@ -58,15 +73,11 @@ bool read_dol_header(const char *filename, struct dol_header *header) {
     uint8_t header_buf[HEADER_SIZE] = {};
     fread(header_buf, HEADER_SIZE, 1, dol_file);
     if (ferror(dol_file)) {
-        fprintf(stderr, "Failed to read DOL file header into memory: %s\n", filename);
-        fclose(dol_file);
-        return false;
+        fatal("Failed to read DOL file header into memory\n");
     }
 
     header->dol_size = dol_size;
     parse_dol_header(header_buf, header);
-
-    return true;
 }
 
 void print_dol_header(struct dol_header *header) {
@@ -120,7 +131,7 @@ uint32_t align_16(uint32_t addr) {
     return aligned;
 }
 
-bool add_section_to_header(struct dol_header *in_header,
+void add_section_to_header(struct dol_header *in_header,
                            uint32_t section_size,
                            struct dol_header *out_header,
                            int *new_section_id) {
@@ -146,8 +157,7 @@ bool add_section_to_header(struct dol_header *in_header,
         }
     }
     if (free_text_id == -1) {
-        fprintf(stderr, "No free text sections available in DOL file\n");
-        return false;
+        fatal("No free text sections available in DOL file\n");
     }
 
     // Create new header with new section
@@ -158,43 +168,123 @@ bool add_section_to_header(struct dol_header *in_header,
     out_header->dol_size = out_header->section_offsets[free_text_id] + out_header->section_sizes[free_text_id];
 
     if (new_section_id) *new_section_id = free_text_id;
+}
 
-    return true;
+void fwrite4_bigendian(uint32_t val, FILE *file) {
+    uint32_t val_bigendian = encode_u32_bigendian(val);
+    fwrite(&val_bigendian, 4, 1, file);
+}
+
+void write_dol_header(FILE *dolfile, struct dol_header *header) {
+    rewind(dolfile);
+
+    for (int section = 0; section < MAX_SECTIONS; section++) {
+        fwrite4_bigendian(header->section_offsets[section], dolfile);
+    }
+    for (int section = 0; section < MAX_SECTIONS; section++) {
+        fwrite4_bigendian(header->section_addresses[section], dolfile);
+    }
+    for (int section = 0; section < MAX_SECTIONS; section++) {
+        fwrite4_bigendian(header->section_sizes[section], dolfile);
+    }
+
+    fwrite4_bigendian(header->bss_address, dolfile);
+    fwrite4_bigendian(header->bss_size, dolfile);
+    fwrite4_bigendian(header->entry_point_address, dolfile);
+}
+
+void add_section_to_dol(FILE *dol_file, struct dol_header *new_header) {
+    write_dol_header(dol_file, new_header);
+
+    // Add section to end of file
+    fseek(dol_file, 0, SEEK_END);
+    uint8_t zero = 0;
+    fwrite(&zero, 1, new_header->dol_size - ftell(dol_file), dol_file);
+}
+
+void cp(FILE *file1, FILE *file2) {
+    fseek(file1, 0, SEEK_END);
+    size_t file1_size = ftell(file1);
+    rewind(file1);
+    rewind(file2);
+
+    void *buf = calloc(1, file1_size);
+    fread(buf, file1_size, 1, file1);
+    fwrite(buf, file1_size, 1, file2);
+
+    free(buf);
+}
+
+void usage() {
+    fprintf(stderr, "Usage: dolch [-a|--add-section] [in.dol] [out.dol] [section_size]\n");
+    fprintf(stderr, "       dolch [-i|--info] [in.dol]\n");
+    exit(1);
+}
+
+void cmd_add_section(int argc, char **argv) {
+    if (argc != 5) usage();
+
+    const char *in_dol_path = argv[2];
+    const char *out_dol_path = argv[3];
+    const char *space_size_str = argv[4];
+    size_t space_size = 0;
+    if (!parse_size(space_size_str, &space_size)) {
+        fatal("Invalid space size: %s\n", space_size_str);
+    }
+
+    // Open input and output files
+    FILE *in_dol_file = fopen(in_dol_path, "rb");
+    if (!in_dol_file) {
+        fatal("Failed to open: %s", in_dol_path);
+    }
+    remove(out_dol_path);
+    FILE *out_dol_file = fopen(out_dol_path, "wb");
+    if (!out_dol_file) {
+        fatal("Failed to open: %s", out_dol_path);
+    }
+
+    // Generate new DOL header
+    struct dol_header orig_header = {}, new_header = {};
+    int new_section_id = 0;
+    read_dol_header(in_dol_file, &orig_header);
+    add_section_to_header(&orig_header, space_size, &new_header, &new_section_id);
+
+    // Write new DOL header to output file
+    cp(in_dol_file, out_dol_file);
+    add_section_to_dol(out_dol_file, &new_header);
+
+    printf("Added section %d in %s, wrote to %s.\n", new_section_id, in_dol_path, out_dol_path);
+
+    fclose(in_dol_file);
+    fclose(out_dol_file);
+}
+
+void cmd_info(int argc, char **argv) {
+    if (argc != 3) usage();
+
+    FILE *in_dol_file = fopen(argv[2], "rb");
+    if (!in_dol_file) {
+        fatal("Failed to open: %s", argv[2]);
+    }
+
+    struct dol_header header = {};
+    read_dol_header(in_dol_file, &header);
+    print_dol_header(&header);
+
+    fclose(in_dol_file);
 }
 
 int main(int argc, char **argv) {
-    if (argc != 4) {
-        fprintf(stderr, "Usage: %s <in.dol> <out.dol> <space_size>\n", argv[0]);
-        exit(1);
+    // Parse arguments
+    if (argc < 2) {
+        usage();
     }
 
-    const char *in_dol = argv[1];
-    const char *out_dol = argv[2];
-    const char *space_size_str = argv[3];
-    size_t space_size = 0;
-    if (!parse_size(space_size_str, &space_size)) {
-        fprintf(stderr, "Invalid space size: %s\n", space_size_str);
-        exit(1);
+    if (strcmp(argv[1], "-a") == 0 || strcmp(argv[1], "--add-section") == 0) {
+        cmd_add_section(argc, argv);
+    } else if (strcmp(argv[1], "-i") == 0 || strcmp(argv[1], "--info") == 0) {
+        cmd_info(argc, argv);
+    } else {
+        usage();
     }
-
-    struct dol_header orig_header = {};
-    if (!read_dol_header(in_dol, &orig_header)) {
-        fprintf(stderr, "Failed to read DOL file header: %s\n", in_dol);
-        exit(1);
-    }
-
-    printf("Original header:\n");
-    print_dol_header(&orig_header);
-    printf("\n");
-
-    struct dol_header new_header = {};
-    int new_section_id = 0;
-    if (!add_section_to_header(&orig_header, space_size, &new_header, &new_section_id)) {
-        fprintf(stderr, "Failed to add a new section.\n");
-        exit(1);
-    }
-
-    printf("New header:\n");
-    print_dol_header(&new_header);
-    printf("\n");
 }
