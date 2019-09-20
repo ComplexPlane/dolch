@@ -3,8 +3,11 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <memory.h>
 
-#define MAX_SECTIONS 18
+#define TEXT_SECTIONS 7
+#define DATA_SECTIONS 11
+#define MAX_SECTIONS (TEXT_SECTIONS + DATA_SECTIONS)
 #define HEADER_SIZE ((MAX_SECTIONS * 3 + 3) * 4)
 
 struct dol_header {
@@ -67,9 +70,15 @@ bool read_dol_header(const char *filename, struct dol_header *header) {
 }
 
 void print_dol_header(struct dol_header *header) {
-    printf("DOL size: %#010zx\n", header->dol_size);
+    printf("DOL size: %#010zx\n\n", header->dol_size);
 
     for (int i = 0; i < MAX_SECTIONS; i++) {
+        if (i == 0) {
+            printf("TEXT SECTIONS\n");
+        } else if (i == TEXT_SECTIONS) {
+            printf("\nDATA SECTIONS\n");
+        }
+
         uint32_t address = header->section_addresses[i];
         uint32_t offset = header->section_offsets[i];
         uint32_t size = header->section_sizes[i];
@@ -77,15 +86,17 @@ void print_dol_header(struct dol_header *header) {
         if (address == 0) {
             printf("Section %02d: unused.\n", i);
         } else {
-            printf("Section %02d: offset = %#010x, start_addr = %#010x, "
-                   "end_addr = %#010x, size = %#010x\n",
+            printf("Section %02d: start_offset = %#010x, end_offset = %#010x, "
+                   "start_addr = %#010x, end_addr = %#010x, size = %#010x\n",
                    i,
                    offset,
+                   offset + size,
                    address,
                    address + size,
                    size);
         }
     }
+    printf("\n");
 
     printf("bss: start_addr = %#010x, end_addr = %#010x, size = %#010x\n",
             header->bss_address,
@@ -103,34 +114,57 @@ bool parse_size(const char *str, size_t *size) {
     return true;
 }
 
-void add_section_to_header(struct dol_header *header) {
-/* TODO
- * Search for last section in memory
- * Search for last section offset in file
- * Search for unused section ID to represent new section
- * Use 16-byte alignment of section just to be extra safe
- * Mutate header, return new section number
- * Another function can be responsible for writing the new header and section to the file
- */
+uint32_t align_16(uint32_t addr) {
+    uint32_t aligned = (addr / 16) * 16;
+    if (aligned < addr) aligned += 16;
+    return aligned;
+}
+
+bool add_section_to_header(struct dol_header *in_header,
+                           uint32_t section_size,
+                           struct dol_header *out_header,
+                           int *new_section_id) {
 
     // Find a memory address that appears after all mapped sections that we can place a new
     // section into
     uint32_t free_addr = 0;
     for (int section = 0; section < MAX_SECTIONS; section++) {
-        uint32_t end_addr = header->section_addresses[section] + header->section_sizes[section];
+        uint32_t end_addr = in_header->section_addresses[section] + in_header->section_sizes[section];
         if (end_addr != 0 && end_addr > free_addr) {
             free_addr = end_addr;
         }
     }
-    uint32_t bss_end = header->bss_address + header->bss_size;
+    uint32_t bss_end = in_header->bss_address + in_header->bss_size;
     if (bss_end > free_addr) free_addr = bss_end;
 
-    // Find a section ID we can place it into
+    // Find a text section ID we can place it into
+    int free_text_id = -1;
+    for (int section = 0; section < TEXT_SECTIONS; section++) {
+        if (in_header->section_addresses[section] == 0) {
+            free_text_id = section;
+            break;
+        }
+    }
+    if (free_text_id == -1) {
+        fprintf(stderr, "No free text sections available in DOL file\n");
+        return false;
+    }
+
+    // Create new header with new section
+    memcpy(out_header, in_header, sizeof(struct dol_header));
+    out_header->section_addresses[free_text_id] = align_16(free_addr);
+    out_header->section_offsets[free_text_id] = align_16(out_header->dol_size);
+    out_header->section_sizes[free_text_id] = align_16(section_size);
+    out_header->dol_size = out_header->section_offsets[free_text_id] + out_header->section_sizes[free_text_id];
+
+    if (new_section_id) *new_section_id = free_text_id;
+
+    return true;
 }
 
 int main(int argc, char **argv) {
     if (argc != 4) {
-        fprintf(stderr, "Usage: <in.dol> <out.dol> <space_size>\n");
+        fprintf(stderr, "Usage: %s <in.dol> <out.dol> <space_size>\n", argv[0]);
         exit(1);
     }
 
@@ -143,11 +177,24 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    struct dol_header header = {};
-    if (!read_dol_header(in_dol, &header)) {
+    struct dol_header orig_header = {};
+    if (!read_dol_header(in_dol, &orig_header)) {
         fprintf(stderr, "Failed to read DOL file header: %s\n", in_dol);
         exit(1);
     }
 
-    print_dol_header(&header);
+    printf("Original header:\n");
+    print_dol_header(&orig_header);
+    printf("\n");
+
+    struct dol_header new_header = {};
+    int new_section_id = 0;
+    if (!add_section_to_header(&orig_header, space_size, &new_header, &new_section_id)) {
+        fprintf(stderr, "Failed to add a new section.\n");
+        exit(1);
+    }
+
+    printf("New header:\n");
+    print_dol_header(&new_header);
+    printf("\n");
 }
