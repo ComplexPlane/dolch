@@ -116,12 +116,12 @@ void print_dol_header(struct dol_header *header) {
     printf("entry point address: %#010x\n", header->entry_point_address);
 }
 
-bool parse_size(const char *str, size_t *size) {
-    long size_long = strtol(str, NULL, 10);
+bool parse_size(const char *str, uint32_t *size) {
+    uint32_t size_long = strtoul(str, NULL, 0);
     if (errno == ERANGE || size_long <= 0) {
         return false;
     }
-    *size = (size_t) size_long;
+    *size = size_long;
     return true;
 }
 
@@ -200,7 +200,7 @@ void add_section_to_dol(FILE *dol_file, struct dol_header *new_header) {
     fseek(dol_file, 0, SEEK_END);
 
     // Better way to do this without malloc?
-    size_t additional_size = new_header->dol_size - ftell(dol_file);
+    uint32_t additional_size = new_header->dol_size - ftell(dol_file);
     void *buf = calloc(1, additional_size);
     fwrite(buf, additional_size, 1, dol_file);
     free(buf);
@@ -222,7 +222,16 @@ void cp(FILE *file1, FILE *file2) {
 void usage() {
     fprintf(stderr, "Usage: dolch [-a|--add-section] [in.dol] [out.dol] [section_size]\n");
     fprintf(stderr, "       dolch [-i|--info] [in.dol]\n");
+    fprintf(stderr, "       dolch [-o|--address-to-offset] [in.dol] [address]\n");
     exit(1);
+}
+
+FILE *open_dol_file(const char *path, const char *modes) {
+    FILE *f = fopen(path, modes);
+    if (!f) {
+        fatal("Failed to open DOL file: %s\n", path);
+    }
+    return f;
 }
 
 void cmd_add_section(int argc, char **argv) {
@@ -231,21 +240,15 @@ void cmd_add_section(int argc, char **argv) {
     const char *in_dol_path = argv[2];
     const char *out_dol_path = argv[3];
     const char *space_size_str = argv[4];
-    size_t space_size = 0;
+    uint32_t space_size = 0;
     if (!parse_size(space_size_str, &space_size)) {
         fatal("Invalid space size: %s\n", space_size_str);
     }
 
     // Open input and output files
-    FILE *in_dol_file = fopen(in_dol_path, "rb");
-    if (!in_dol_file) {
-        fatal("Failed to open: %s", in_dol_path);
-    }
+    FILE *in_dol_file = open_dol_file(in_dol_path, "rb");
     remove(out_dol_path);
-    FILE *out_dol_file = fopen(out_dol_path, "wb");
-    if (!out_dol_file) {
-        fatal("Failed to open: %s", out_dol_path);
-    }
+    FILE *out_dol_file = open_dol_file(out_dol_path, "wb");
 
     // Generate new DOL header
     struct dol_header orig_header = {}, new_header = {};
@@ -266,16 +269,44 @@ void cmd_add_section(int argc, char **argv) {
 void cmd_info(int argc, char **argv) {
     if (argc != 3) usage();
 
-    FILE *in_dol_file = fopen(argv[2], "rb");
-    if (!in_dol_file) {
-        fatal("Failed to open: %s", argv[2]);
-    }
-
+    FILE *in_dol_file = open_dol_file(argv[2], "rb");
     struct dol_header header = {};
     read_dol_header(in_dol_file, &header);
     print_dol_header(&header);
 
     fclose(in_dol_file);
+}
+
+void cmd_address_to_offset(int argc, char **argv) {
+    if (argc != 4) usage();
+    const char *dol_filepath = argv[2];
+    const char *addr_str = argv[3];
+
+    FILE *dol_file = open_dol_file(dol_filepath, "rb");
+    struct dol_header header = {};
+    read_dol_header(dol_file, &header);
+
+    uint32_t addr = strtoul(addr_str, NULL, 0);
+    if (errno == ERANGE || addr == 0) {
+        fatal("Invalid address: %s\n", addr_str);
+    }
+
+    int addr_section = -1;
+    for (int section = 0; section < MAX_SECTIONS; section++) {
+        uint32_t start = header.section_addresses[section];
+        uint32_t end = start + header.section_sizes[section];
+        if (addr >= start && addr < end) {
+            addr_section = section;
+            break;
+        }
+    }
+    if (addr_section == -1) {
+        fatal("Address %s is not part of any section in %s.\n", addr_str, dol_filepath);
+    }
+
+    uint32_t offset = addr - header.section_addresses[addr_section] + header
+            .section_offsets[addr_section];
+    printf("Memory address %s is at offset %#010zx\n", addr_str, offset);
 }
 
 int main(int argc, char **argv) {
@@ -284,10 +315,12 @@ int main(int argc, char **argv) {
         usage();
     }
 
-    if (strcmp(argv[1], "-a") == 0 || strcmp(argv[1], "--add-section") == 0) {
+    if (!strcmp(argv[1], "-a") || !strcmp(argv[1], "--add-section")) {
         cmd_add_section(argc, argv);
-    } else if (strcmp(argv[1], "-i") == 0 || strcmp(argv[1], "--info") == 0) {
+    } else if (!strcmp(argv[1], "-i") || !strcmp(argv[1], "--info")) {
         cmd_info(argc, argv);
+    } else if (!strcmp(argv[1], "-o") || !strcmp(argv[1], "--address-to-offset")) {
+        cmd_address_to_offset(argc, argv);
     } else {
         usage();
     }
