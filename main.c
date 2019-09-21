@@ -306,7 +306,7 @@ void cmd_address_to_offset(int argc, char **argv) {
 
     uint32_t offset = addr - header.section_addresses[addr_section] + header
             .section_offsets[addr_section];
-    printf("Memory address %s is at offset %#010zx\n", addr_str, offset);
+    printf("Memory address %s is at offset %#010x\n", addr_str, offset);
 }
 
 int main(int argc, char **argv) {
