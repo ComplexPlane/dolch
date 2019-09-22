@@ -5,9 +5,9 @@ Simple Gamecube/Wii DOL executable utility. Currently you can add a new code sec
 ## Usage
 
 ```
-dolch [-a|--add-section] [in.dol] [out.dol] [section_size]
-dolch [-i|--info] [in.dol]
-dolch [-o|--address-to-offset] [in.dol] [address]
+dolch addsection <IN_DOL> <OUT_DOL> <SECTION_SIZE> [SECTION_ADDRESS]
+dolch info <IN_DOL>
+dolch offset <IN_DOL> <ADDRESS>
 ```
 
 ## Sample output

@@ -220,9 +220,11 @@ void cp(FILE *file1, FILE *file2) {
 }
 
 void usage() {
-    fprintf(stderr, "Usage: dolch [-a|--add-section] [in.dol] [out.dol] [section_size]\n");
-    fprintf(stderr, "       dolch [-i|--info] [in.dol]\n");
-    fprintf(stderr, "       dolch [-o|--address-to-offset] [in.dol] [address]\n");
+    fprintf(stderr, "dolch: a simple Gamecube/Wii DOL injection and inspection utility.\n\n");
+    fprintf(stderr, "USAGE:\n");
+    fprintf(stderr, "    dolch addsection <IN_DOL> <OUT_DOL> <SECTION_SIZE> [SECTION_ADDRESS]\n");
+    fprintf(stderr, "    dolch info <IN_DOL>\n");
+    fprintf(stderr, "    dolch offset <IN_DOL> <ADDRESS>\n");
     exit(1);
 }
 
@@ -235,14 +237,15 @@ FILE *open_dol_file(const char *path, const char *modes) {
 }
 
 void cmd_add_section(int argc, char **argv) {
-    if (argc != 5) usage();
+    if (argc != 5 && argc != 6) usage();
 
     const char *in_dol_path = argv[2];
     const char *out_dol_path = argv[3];
-    const char *space_size_str = argv[4];
+    const char *section_size_str = argv[4];
+    const char *section_addr_str = argc == 6 ? argv[5] : NULL;
     uint32_t space_size = 0;
-    if (!parse_size(space_size_str, &space_size)) {
-        fatal("Invalid space size: %s\n", space_size_str);
+    if (!parse_size(section_size_str, &space_size)) {
+        fatal("Invalid space size: %s\n", section_size_str);
     }
 
     // Open input and output files
@@ -306,7 +309,7 @@ void cmd_address_to_offset(int argc, char **argv) {
 
     uint32_t offset = addr - header.section_addresses[addr_section] + header
             .section_offsets[addr_section];
-    printf("Memory address %s is at offset %#010x\n", addr_str, offset);
+    printf("Memory address %s is at offset %#010x.\n", addr_str, offset);
 }
 
 int main(int argc, char **argv) {
@@ -315,13 +318,10 @@ int main(int argc, char **argv) {
         usage();
     }
 
-    if (!strcmp(argv[1], "-a") || !strcmp(argv[1], "--add-section")) {
-        cmd_add_section(argc, argv);
-    } else if (!strcmp(argv[1], "-i") || !strcmp(argv[1], "--info")) {
-        cmd_info(argc, argv);
-    } else if (!strcmp(argv[1], "-o") || !strcmp(argv[1], "--address-to-offset")) {
-        cmd_address_to_offset(argc, argv);
-    } else {
-        usage();
-    }
+    const char *subcmd = argv[1];
+
+    if (!strcmp(subcmd, "addsection")) cmd_add_section(argc, argv);
+    else if (!strcmp(subcmd, "info")) cmd_info(argc, argv);
+    else if (!strcmp(subcmd, "offset")) cmd_address_to_offset(argc, argv);
+    else usage();
 }
