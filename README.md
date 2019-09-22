@@ -13,7 +13,7 @@ dolch offset <IN_DOL> <ADDRESS>
 ## Sample output
 
 ```
-$ dolch -i main.dol
+$ dolch info main.dol
 DOL size: 0x00407b00
 
 TEXT SECTIONS
