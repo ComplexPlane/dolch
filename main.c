@@ -133,20 +133,40 @@ uint32_t align_16(uint32_t addr) {
 
 void add_section_to_header(struct dol_header *in_header,
                            uint32_t section_size,
+                           uint32_t *section_addr,
+
                            struct dol_header *out_header,
                            int *new_section_id) {
 
-    // Find a memory address that appears after all mapped sections that we can place a new
-    // section into
-    uint32_t free_addr = 0;
-    for (int section = 0; section < MAX_SECTIONS; section++) {
-        uint32_t end_addr = in_header->section_addresses[section] + in_header->section_sizes[section];
-        if (end_addr != 0 && end_addr > free_addr) {
-            free_addr = end_addr;
-        }
-    }
+    uint32_t free_start = 0;
     uint32_t bss_end = in_header->bss_address + in_header->bss_size;
-    if (bss_end > free_addr) free_addr = bss_end;
+
+    if (section_addr) {
+        // Check if section is available
+        free_start = *section_addr;
+        uint32_t free_end = free_start + section_size;
+        for (int section = 0; section < MAX_SECTIONS; section++) {
+            uint32_t section_start = in_header->section_addresses[section];
+            uint32_t section_end = section_start + in_header->section_sizes[section];
+            if (free_end >= section_start && free_start < section_end) {
+                fatal("Requested new section overlaps section %d\n", section);
+            }
+        }
+        if (!(free_end <= in_header->bss_address || free_start >= bss_end)) {
+            fatal("Requested new section overlaps bss section\n");
+        }
+
+    } else {
+        // Find a memory address that appears after all mapped sections that we can place a new
+        // section into
+        for (int section = 0; section < MAX_SECTIONS; section++) {
+            uint32_t end_addr = in_header->section_addresses[section] + in_header->section_sizes[section];
+            if (end_addr != 0 && end_addr > free_start) {
+                free_start = end_addr;
+            }
+        }
+        if (bss_end > free_start) free_start = bss_end;
+    }
 
     // Find a text section ID we can place it into
     int free_text_id = -1;
@@ -162,7 +182,7 @@ void add_section_to_header(struct dol_header *in_header,
 
     // Create new header with new section
     memcpy(out_header, in_header, sizeof(struct dol_header));
-    out_header->section_addresses[free_text_id] = align_16(free_addr);
+    out_header->section_addresses[free_text_id] = align_16(free_start);
     out_header->section_offsets[free_text_id] = align_16(out_header->dol_size);
     out_header->section_sizes[free_text_id] = align_16(section_size);
     out_header->dol_size = out_header->section_offsets[free_text_id] + out_header->section_sizes[free_text_id];
@@ -170,7 +190,7 @@ void add_section_to_header(struct dol_header *in_header,
     if (new_section_id) *new_section_id = free_text_id;
 }
 
-void fwrite4_bigendian(uint32_t val, FILE *file) {
+void fwrite4_bigendian(FILE *file, uint32_t val) {
     uint32_t val_bigendian = encode_u32_bigendian(val);
     fwrite(&val_bigendian, 4, 1, file);
 }
@@ -179,18 +199,18 @@ void write_dol_header(FILE *dolfile, struct dol_header *header) {
     rewind(dolfile);
 
     for (int section = 0; section < MAX_SECTIONS; section++) {
-        fwrite4_bigendian(header->section_offsets[section], dolfile);
+        fwrite4_bigendian(dolfile, header->section_offsets[section]);
     }
     for (int section = 0; section < MAX_SECTIONS; section++) {
-        fwrite4_bigendian(header->section_addresses[section], dolfile);
+        fwrite4_bigendian(dolfile, header->section_addresses[section]);
     }
     for (int section = 0; section < MAX_SECTIONS; section++) {
-        fwrite4_bigendian(header->section_sizes[section], dolfile);
+        fwrite4_bigendian(dolfile, header->section_sizes[section]);
     }
 
-    fwrite4_bigendian(header->bss_address, dolfile);
-    fwrite4_bigendian(header->bss_size, dolfile);
-    fwrite4_bigendian(header->entry_point_address, dolfile);
+    fwrite4_bigendian(dolfile, header->bss_address);
+    fwrite4_bigendian(dolfile, header->bss_size);
+    fwrite4_bigendian(dolfile, header->entry_point_address);
 }
 
 void add_section_to_dol(FILE *dol_file, struct dol_header *new_header) {
@@ -243,9 +263,16 @@ void cmd_add_section(int argc, char **argv) {
     const char *out_dol_path = argv[3];
     const char *section_size_str = argv[4];
     const char *section_addr_str = argc == 6 ? argv[5] : NULL;
-    uint32_t space_size = 0;
-    if (!parse_size(section_size_str, &space_size)) {
+
+    uint32_t section_size = 0;
+    uint32_t section_addr = 0;
+    if (!parse_size(section_size_str, &section_size)) {
         fatal("Invalid space size: %s\n", section_size_str);
+    }
+    if (section_addr_str) {
+        if (!parse_size(section_addr_str, &section_addr)) {
+            fatal("Invalid section address: %s\n", section_addr_str);
+        }
     }
 
     // Open input and output files
@@ -257,7 +284,11 @@ void cmd_add_section(int argc, char **argv) {
     struct dol_header orig_header = {}, new_header = {};
     int new_section_id = 0;
     read_dol_header(in_dol_file, &orig_header);
-    add_section_to_header(&orig_header, space_size, &new_header, &new_section_id);
+    add_section_to_header(&orig_header,
+                          section_size,
+                          section_addr_str ? &section_addr : NULL,
+                          &new_header,
+                          &new_section_id);
 
     // Write new DOL header to output file
     cp(in_dol_file, out_dol_file);
