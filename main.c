@@ -95,7 +95,7 @@ void print_dol_header(struct dol_header *header) {
         uint32_t size = header->section_sizes[i];
 
         if (address == 0) {
-            printf("Section %02d: unused.\n", i);
+            printf("Section %02d: unused\n", i);
         } else {
             printf("Section %02d: start_offset = %#010x, end_offset = %#010x, "
                    "start_addr = %#010x, end_addr = %#010x, size = %#010x\n",
@@ -240,7 +240,7 @@ void cp(FILE *file1, FILE *file2) {
 }
 
 void usage() {
-    fprintf(stderr, "dolch: a simple Gamecube/Wii DOL injection and inspection utility.\n\n");
+    fprintf(stderr, "dolch: a simple Gamecube/Wii DOL injection and inspection utility\n\n");
     fprintf(stderr, "USAGE:\n");
     fprintf(stderr, "    dolch addsection <IN_DOL> <OUT_DOL> <SECTION_SIZE> [SECTION_ADDRESS]\n");
     fprintf(stderr, "    dolch info <IN_DOL>\n");
@@ -294,7 +294,7 @@ void cmd_add_section(int argc, char **argv) {
     cp(in_dol_file, out_dol_file);
     add_section_to_dol(out_dol_file, &new_header);
 
-    printf("Added section %d in %s, wrote to %s.\n", new_section_id, in_dol_path, out_dol_path);
+    printf("Added section %d in %s, wrote to %s\n", new_section_id, in_dol_path, out_dol_path);
 
     fclose(in_dol_file);
     fclose(out_dol_file);
@@ -340,7 +340,7 @@ void cmd_address_to_offset(int argc, char **argv) {
 
     uint32_t offset = addr - header.section_addresses[addr_section] + header
             .section_offsets[addr_section];
-    printf("Memory address %s is at offset %#010x.\n", addr_str, offset);
+    printf("Memory address %s is at offset %#010x\n", addr_str, offset);
 }
 
 int main(int argc, char **argv) {
